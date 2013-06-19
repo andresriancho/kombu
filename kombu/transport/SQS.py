@@ -43,6 +43,12 @@ def maybe_int(x):
 BOTO_VERSION = tuple(maybe_int(part) for part in boto.__version__.split('.'))
 W_LONG_POLLING = BOTO_VERSION >= (2, 8)
 
+# This is used as the user for SQS connections that want to let boto handle
+# the source of the credentials, specially useful for cases where the SQS
+# credentials are in .boto.cfg or more interestingly in the instance profile
+# @see: https://github.com/celery/kombu/issues/239
+BOTO_PROVIDER = 'boto-provider'
+
 
 class Table(Domain):
     """Amazon SimpleDB domain describing the message routing table."""
@@ -306,10 +312,13 @@ class Channel(virtual.Channel):
     def _aws_connect_to(self, fun, regions):
         conninfo = self.conninfo
         region = self._get_regioninfo(regions)
-        return fun(region=region,
-                   aws_access_key_id=conninfo.userid,
-                   aws_secret_access_key=conninfo.password,
-                   port=conninfo.port)
+
+        if conninfo.userid == BOTO_PROVIDER:
+            return fun(region=region)
+        else:    
+            return fun(region=region,
+                       aws_access_key_id=conninfo.userid,
+                       aws_secret_access_key=conninfo.password)
 
     def _next_delivery_tag(self):
         return uuid()  # See #73
