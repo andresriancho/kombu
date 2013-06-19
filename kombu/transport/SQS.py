@@ -35,6 +35,12 @@ CHARS_REPLACE_TABLE = dict((ord(c), 0x5f)
                            for c in string.punctuation if c not in '-_.')
 CHARS_REPLACE_TABLE[0x2e] = 0x2d  # '.' -> '-'
 
+# This is used as the user for SQS connections that want to let boto handle
+# the source of the credentials, specially useful for cases where the SQS
+# credentials are in .boto.cfg or more interestingly in the instance profile
+# @see: https://github.com/celery/kombu/issues/239
+BOTO_PROVIDER = 'boto-provider'
+
 
 def maybe_int(x):
     try:
@@ -307,10 +313,13 @@ class Channel(virtual.Channel):
     def _aws_connect_to(self, fun, regions):
         conninfo = self.conninfo
         region = self._get_regioninfo(regions)
-        return fun(region=region,
-                   aws_access_key_id=conninfo.userid,
-                   aws_secret_access_key=conninfo.password,
-                   port=conninfo.port)
+        
+        if conninfo.userid == BOTO_PROVIDER:
+            return fun(region=region)
+        else:    
+            return fun(region=region,
+                       aws_access_key_id=conninfo.userid,
+                       aws_secret_access_key=conninfo.password)
 
     def _next_delivery_tag(self):
         return uuid()  # See #73
