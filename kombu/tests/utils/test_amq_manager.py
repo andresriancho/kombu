@@ -1,12 +1,11 @@
 from __future__ import absolute_import
 
-from mock import patch
-
 from kombu import Connection
-from kombu.tests.utils import TestCase, mask_modules, module_exists
+
+from kombu.tests.case import Case, mask_modules, module_exists, patch
 
 
-class test_get_manager(TestCase):
+class test_get_manager(Case):
 
     @mask_modules('pyrabbit')
     def test_without_pyrabbit(self):
@@ -19,7 +18,7 @@ class test_get_manager(TestCase):
             manager = Connection('amqp://').get_manager()
             self.assertIsNotNone(manager)
             Client.assert_called_with(
-                'localhost:55672', 'guest', 'guest',
+                'localhost:15672', 'guest', 'guest',
             )
 
     @module_exists('pyrabbit')

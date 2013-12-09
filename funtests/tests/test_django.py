@@ -1,6 +1,6 @@
 from nose import SkipTest
 
-from kombu.tests.utils import redirect_stdouts
+from kombu.tests.case import redirect_stdouts
 
 from funtests import transport
 
@@ -29,7 +29,7 @@ class test_django(transport.TransportCase):
                             'NAME': ':memory:',
                         },
                     },
-                    INSTALLED_APPS=('kombu.transports.django', ),
+                    INSTALLED_APPS=('kombu.transport.django', ),
                 )
             from django.core.management import call_command
             call_command('syncdb')

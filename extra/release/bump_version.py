@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from tempfile import NamedTemporaryFile
 
 rq = lambda s: s.strip("\"'")
+str_t = str if sys.version_info[0] >= 3 else basestring
 
 
 def cmd(*args):
@@ -54,7 +55,7 @@ class TupleVersion(object):
         v = list(v)
 
         def quote(lit):
-            if isinstance(lit, basestring):
+            if isinstance(lit, str_t):
                 return '"%s"' % (lit, )
             return str(lit)
 

@@ -4,7 +4,7 @@ import socket
 
 from kombu.mixins import ConsumerMixin
 
-from .utils import TestCase, Mock, ContextMock, patch
+from .case import Case, Mock, ContextMock, patch
 
 
 def Message(body, content_type='text/plain', content_encoding='utf-8'):
@@ -31,7 +31,7 @@ class Cons(ConsumerMixin):
         self.extra_context.return_value = self.extra_context
 
 
-class test_ConsumerMixin(TestCase):
+class test_ConsumerMixin(Case):
 
     def _context(self):
         Acons = ContextMock(name='consumerA')
@@ -108,7 +108,7 @@ class test_ConsumerMixin(TestCase):
         c.on_consume_end.assert_called_with(conn, channel)
 
 
-class test_ConsumerMixin_interface(TestCase):
+class test_ConsumerMixin_interface(Case):
 
     def setUp(self):
         self.c = ConsumerMixin()
@@ -195,6 +195,7 @@ class test_ConsumerMixin_interface(TestCase):
         conn = ContextMock(name='connection')
         self.c.connection = conn
         conn.connection_errors = (KeyError, )
+        conn.channel_errors = ()
         consume = self.c.consume = Mock(name='c.consume')
 
         def se(*args, **kwargs):
@@ -208,6 +209,7 @@ class test_ConsumerMixin_interface(TestCase):
         conn = ContextMock(name='connection')
         self.c.connection = conn
         conn.connection_errors = (KeyError, )
+        conn.channel_errors = ()
         consume = self.c.consume = Mock(name='c.consume')
         with patch('kombu.mixins.sleep') as sleep:
             counter = [0]
@@ -226,6 +228,7 @@ class test_ConsumerMixin_interface(TestCase):
         conn = ContextMock(name='connection')
         self.c.connection = conn
         conn.connection_errors = (KeyError, )
+        conn.channel_errors = ()
         consume = self.c.consume = Mock(name='c.consume')
 
         with patch('kombu.mixins.warn') as warn:

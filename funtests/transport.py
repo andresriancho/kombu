@@ -1,3 +1,5 @@
+from __future__ import absolute_import, print_function
+
 import random
 import socket
 import string
@@ -11,7 +13,8 @@ from nose import SkipTest
 
 from kombu import Connection
 from kombu import Exchange, Queue
-from kombu.tests.utils import skip_if_quick
+from kombu.five import range
+from kombu.tests.case import skip_if_quick
 
 if sys.version_info >= (2, 5):
     from hashlib import sha256 as _digest
@@ -20,7 +23,7 @@ else:
 
 
 def say(msg):
-    sys.stderr.write(unicode(msg) + '\n')
+    print(msg, file=sys.stderr)
 
 
 def _nobuf(x):
@@ -151,7 +154,7 @@ class TransportCase(unittest.TestCase):
         self.purge_consumer(consumer)
 
         producer = chan1.Producer(self.exchange)
-        for i in xrange(10):
+        for i in range(10):
             producer.publish({'foo': 'bar'}, routing_key=self.prefix)
         if self.reliable_purge:
             self.assertEqual(consumer.purge(), 10)
@@ -170,10 +173,10 @@ class TransportCase(unittest.TestCase):
             charset=string.punctuation + string.letters + string.digits):
         if not self.verify_alive():
             return
-        bytes = min(filter(None, [bytes, self.message_size_limit]))
+        bytes = min(x for x in [bytes, self.message_size_limit] if x)
         messages = [''.join(random.choice(charset)
-                    for j in xrange(bytes)) + '--%s' % n
-                    for i in xrange(n)]
+                    for j in range(bytes)) + '--%s' % n
+                    for i in range(n)]
         digests = []
         chan1 = self.connection.channel()
         consumer = chan1.Consumer(self.queue)
@@ -188,7 +191,7 @@ class TransportCase(unittest.TestCase):
                     for msg in consumeN(self.connection, consumer, n)]
         self.assertEqual(len(received), n)
         ordering = [i for i, _ in received]
-        if ordering != range(n) and not self.suppress_disorder_warning:
+        if ordering != list(range(n)) and not self.suppress_disorder_warning:
             warnings.warn(
                 '%s did not deliver messages in FIFO order: %r' % (
                     self.transport, ordering))
@@ -216,9 +219,9 @@ class TransportCase(unittest.TestCase):
         [q.declare() for q in (b1, b2, b3)]
         self.purge([b1.name, b2.name, b3.name])
 
-        producer.publish(u'b1', routing_key='b1')
-        producer.publish(u'b2', routing_key='b2')
-        producer.publish(u'b3', routing_key='b3')
+        producer.publish('b1', routing_key='b1')
+        producer.publish('b2', routing_key='b2')
+        producer.publish('b3', routing_key='b3')
         chan1.close()
 
         chan2 = self.connection.channel()
@@ -294,7 +297,7 @@ class TransportCase(unittest.TestCase):
             conn.connect()
             chanrefs = []
             try:
-                for i in xrange(100):
+                for i in range(100):
                     channel = conn.channel()
                     chanrefs.append(weakref.ref(channel))
                     channel.close()

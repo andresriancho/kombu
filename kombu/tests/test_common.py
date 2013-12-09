@@ -2,23 +2,19 @@ from __future__ import absolute_import
 
 import socket
 
-from mock import patch
-
 from kombu import common
 from kombu.common import (
     Broadcast, maybe_declare,
-    send_reply, isend_reply, collect_replies,
+    send_reply, collect_replies,
     declaration_cached, ignore_errors,
     QoS, PREFETCH_COUNT_MAX,
-    entry_to_queue,
 )
-from kombu.exceptions import StdChannelError
+from kombu.exceptions import ChannelError
 
-from .utils import TestCase
-from .utils import ContextMock, Mock, MockPool
+from .case import Case, ContextMock, Mock, MockPool, patch
 
 
-class test_ignore_errors(TestCase):
+class test_ignore_errors(Case):
 
     def test_ignored(self):
         connection = Mock()
@@ -41,7 +37,7 @@ class test_ignore_errors(TestCase):
                 raise KeyError()
 
 
-class test_declaration_cached(TestCase):
+class test_declaration_cached(Case):
 
     def test_when_cached(self):
         chan = Mock()
@@ -54,7 +50,7 @@ class test_declaration_cached(TestCase):
         self.assertFalse(declaration_cached('foo', chan))
 
 
-class test_Broadcast(TestCase):
+class test_Broadcast(Case):
 
     def test_arguments(self):
         q = Broadcast(name='test_Broadcast')
@@ -69,7 +65,7 @@ class test_Broadcast(TestCase):
         self.assertEqual(q.exchange.name, 'test_Broadcast')
 
 
-class test_maybe_declare(TestCase):
+class test_maybe_declare(Case):
 
     def test_cacheable(self):
         channel = Mock()
@@ -83,13 +79,15 @@ class test_maybe_declare(TestCase):
 
         maybe_declare(entity, channel)
         self.assertEqual(entity.declare.call_count, 1)
-        self.assertIn(entity, channel.connection.client.declared_entities)
+        self.assertIn(
+            hash(entity), channel.connection.client.declared_entities,
+        )
 
         maybe_declare(entity, channel)
         self.assertEqual(entity.declare.call_count, 1)
 
         entity.channel.connection = None
-        with self.assertRaises(StdChannelError):
+        with self.assertRaises(ChannelError):
             maybe_declare(entity)
 
     def test_binds_entities(self):
@@ -115,11 +113,12 @@ class test_maybe_declare(TestCase):
         self.assertTrue(channel.connection.client.ensure.call_count)
 
 
-class test_replies(TestCase):
+class test_replies(Case):
 
     def test_send_reply(self):
         req = Mock()
         req.content_type = 'application/json'
+        req.content_encoding = 'binary'
         req.properties = {'reply_to': 'hello',
                           'correlation_id': 'world'}
         channel = Mock()
@@ -137,18 +136,10 @@ class test_replies(TestCase):
         self.assertDictEqual(args[1], {'exchange': exchange,
                                        'routing_key': 'hello',
                                        'correlation_id': 'world',
-                                       'serializer': 'json'})
-
-        exchange.declare.assert_called_with()
-
-    @patch('kombu.common.ipublish')
-    def test_isend_reply(self, ipublish):
-        pool, exchange, req, msg, props = (Mock(), Mock(), Mock(),
-                                           Mock(), Mock())
-
-        isend_reply(pool, exchange, req, msg, props)
-        ipublish.assert_called_with(pool, send_reply,
-                                    (exchange, req, msg), props)
+                                       'serializer': 'json',
+                                       'retry': False,
+                                       'retry_policy': None,
+                                       'content_encoding': 'binary'})
 
     @patch('kombu.common.itermessages')
     def test_collect_replies_with_ack(self, itermessages):
@@ -188,7 +179,7 @@ class test_replies(TestCase):
         self.assertFalse(channel.after_reply_message_received.called)
 
 
-class test_insured(TestCase):
+class test_insured(Case):
 
     @patch('kombu.common.logger')
     def test_ensure_errback(self, logger):
@@ -202,14 +193,6 @@ class test_insured(TestCase):
         on_revive.assert_called_with(channel)
 
         common.revive_connection(Mock(), channel, None)
-
-    def test_revive_producer(self):
-        on_revive = Mock()
-        channel = Mock()
-        common.revive_producer(Mock(), channel, on_revive)
-        on_revive.assert_called_with(channel)
-
-        common.revive_producer(Mock(), channel, None)
 
     def get_insured_mocks(self, insured_returns=('works', 'ignored')):
         conn = ContextMock()
@@ -248,39 +231,6 @@ class test_insured(TestCase):
                        errback=custom_errback)
         conn.ensure_connection.assert_called_with(errback=custom_errback)
 
-    def get_ipublish_args(self, ensure_returns=None):
-        producer = ContextMock()
-        pool = MockPool(producer)
-        fun = Mock()
-        ensure_returns = ensure_returns or Mock()
-
-        producer.connection.ensure.return_value = ensure_returns
-
-        return producer, pool, fun, ensure_returns
-
-    def test_ipublish(self):
-        producer, pool, fun, ensure_returns = self.get_ipublish_args()
-        ensure_returns.return_value = 'works'
-
-        ret = common.ipublish(pool, fun, (2, 2), {'foo': 'bar'})
-        self.assertEqual(ret, 'works')
-
-        self.assertTrue(producer.connection.ensure.called)
-        e_args, e_kwargs = producer.connection.ensure.call_args
-        self.assertTupleEqual(e_args, (producer, fun))
-        self.assertTrue(e_kwargs.get('on_revive'))
-        self.assertEqual(e_kwargs.get('errback'), common._ensure_errback)
-
-        ensure_returns.assert_called_with(2, 2, foo='bar', producer=producer)
-
-    def test_ipublish_with_custom_errback(self):
-        producer, pool, fun, _ = self.get_ipublish_args()
-
-        errback = Mock()
-        common.ipublish(pool, fun, (2, 2), {'foo': 'bar'}, errback=errback)
-        _, e_kwargs = producer.connection.ensure.call_args
-        self.assertEqual(e_kwargs.get('errback'), errback)
-
 
 class MockConsumer(object):
     consumers = set()
@@ -298,7 +248,7 @@ class MockConsumer(object):
         self.consumers.discard(self)
 
 
-class test_itermessages(TestCase):
+class test_itermessages(Case):
 
     class MockConnection(object):
         should_raise_timeout = False
@@ -347,15 +297,7 @@ class test_itermessages(TestCase):
             next(it)
 
 
-class test_entry_to_queue(TestCase):
-
-    def test_calls_Queue_from_dict(self):
-        with patch('kombu.common.Queue') as Queue:
-            entry_to_queue('name', exchange='bar')
-            Queue.from_dict.assert_called_with('name', exchange='bar')
-
-
-class test_QoS(TestCase):
+class test_QoS(Case):
 
     class _QoS(QoS):
         def __init__(self, value):

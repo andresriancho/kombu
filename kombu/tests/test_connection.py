@@ -1,24 +1,19 @@
 from __future__ import absolute_import
 
-import errno
 import pickle
 import socket
 
 from copy import copy
-from mock import patch
-from nose import SkipTest
 
 from kombu import Connection, Consumer, Producer, parse_url
 from kombu.connection import Resource
 from kombu.five import items, range
 
+from .case import Case, Mock, SkipTest, patch, skip_if_not_module
 from .mocks import Transport
-from .utils import TestCase
-
-from .utils import Mock, skip_if_not_module
 
 
-class test_connection_utils(TestCase):
+class test_connection_utils(Case):
 
     def setUp(self):
         self.url = 'amqp://user:pass@localhost:5672/my/vhost'
@@ -48,6 +43,11 @@ class test_connection_utils(TestCase):
         # by default almost the same- no password
         self.assertEqual(conn.as_uri(), self.nopass)
         self.assertEqual(conn.as_uri(include_password=True), self.url)
+
+    def test_as_uri_when_prefix(self):
+        conn = Connection('memory://')
+        conn.uri_prefix = 'foo'
+        self.assertTrue(conn.as_uri().startswith('foo+memory://'))
 
     @skip_if_not_module('pymongo')
     def test_as_uri_when_mongodb(self):
@@ -142,7 +142,7 @@ class test_connection_utils(TestCase):
         )
 
 
-class test_Connection(TestCase):
+class test_Connection(Case):
 
     def setUp(self):
         self.conn = Connection(port=5672, transport=Transport)
@@ -210,9 +210,10 @@ class test_Connection(TestCase):
         self.assertIsNone(connection._transport)
 
     def test_uri_passthrough(self):
-        from kombu import connection as mod
-        prev, mod.URI_PASSTHROUGH = mod.URI_PASSTHROUGH, set(['foo'])
-        try:
+        transport = Mock(name='transport')
+        with patch('kombu.connection.get_transport_cls') as gtc:
+            gtc.return_value = transport
+            transport.can_parse_url = True
             with patch('kombu.connection.parse_url') as parse_url:
                 c = Connection('foo+mysql://some_host')
                 self.assertEqual(c.transport_cls, 'foo')
@@ -224,10 +225,8 @@ class test_Connection(TestCase):
                 self.assertEqual(c.transport_cls, 'foo')
                 self.assertFalse(parse_url.called)
                 self.assertEqual(c.hostname, 'mysql://some_host')
-        finally:
-            mod.URI_PASSTHROUGH = prev
-        c = Connection('amqp+sqlite://some_host')
-        self.assertTrue(c.as_uri().startswith('amqp+'))
+        c = Connection('pyamqp+sqlite://some_host')
+        self.assertTrue(c.as_uri().startswith('pyamqp+'))
 
     def test_default_ensure_callback(self):
         with patch('kombu.connection.logger') as logger:
@@ -260,32 +259,6 @@ class test_Connection(TestCase):
             self.assertEqual(cb(KeyError(), intervals, 0), 0)
             self.assertTrue(errback.called)
 
-    def test_drain_nowait(self):
-        c = Connection(transport=Mock)
-        c.drain_events = Mock()
-        c.drain_events.side_effect = socket.timeout()
-
-        c.more_to_read = True
-        self.assertFalse(c.drain_nowait())
-        self.assertFalse(c.more_to_read)
-
-        c.drain_events.side_effect = socket.error()
-        c.drain_events.side_effect.errno = errno.EAGAIN
-        c.more_to_read = True
-        self.assertFalse(c.drain_nowait())
-        self.assertFalse(c.more_to_read)
-
-        c.drain_events.side_effect = socket.error()
-        c.drain_events.side_effect.errno = errno.EPERM
-        with self.assertRaises(socket.error):
-            c.drain_nowait()
-
-        c.more_to_read = False
-        c.drain_events = Mock()
-        self.assertTrue(c.drain_nowait())
-        c.drain_events.assert_called_with(timeout=0)
-        self.assertTrue(c.more_to_read)
-
     def test_supports_heartbeats(self):
         c = Connection(transport=Mock)
         c.transport.supports_heartbeats = False
@@ -296,11 +269,13 @@ class test_Connection(TestCase):
         c.transport.supports_ev = False
         self.assertFalse(c.is_evented)
 
-    def test_eventmap(self):
+    def test_register_with_event_loop(self):
         c = Connection(transport=Mock)
-        c.transport.eventmap.return_value = {1: 1, 2: 2}
-        self.assertDictEqual(c.eventmap, {1: 1, 2: 2})
-        c.transport.eventmap.assert_called_with(c.connection)
+        loop = Mock(name='loop')
+        c.register_with_event_loop(loop)
+        c.transport.register_with_event_loop.assert_called_with(
+            c.connection, loop,
+        )
 
     def test_manager(self):
         c = Connection(transport=Mock)
@@ -512,7 +487,7 @@ class test_Connection(TestCase):
         self.assertTupleEqual(conn.connection_errors, (KeyError, ValueError))
 
 
-class test_Connection_with_transport_options(TestCase):
+class test_Connection_with_transport_options(Case):
 
     transport_options = {'pool_recycler': 3600, 'echo': True}
 
@@ -531,7 +506,7 @@ class xResource(Resource):
         pass
 
 
-class ResourceCase(TestCase):
+class ResourceCase(Case):
     abstract = True
 
     def create_resource(self, limit, preload):

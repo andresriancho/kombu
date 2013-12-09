@@ -12,14 +12,12 @@ from itertools import count
 from .compression import compress
 from .connection import maybe_channel, is_connection
 from .entity import Exchange, Queue, DELIVERY_MODES
+from .exceptions import ContentDisallowed
 from .five import int_types, text_t, values
-from .serialization import encode, registry
+from .serialization import dumps, prepare_accept_content
 from .utils import ChannelPromise, maybe_list
 
 __all__ = ['Exchange', 'Queue', 'Producer', 'Consumer']
-
-# XXX compat attribute
-entry_to_queue = Queue.from_dict
 
 
 class Producer(object):
@@ -234,7 +232,7 @@ class Producer(object):
         if not content_type:
             serializer = serializer or self.serializer
             (content_type, content_encoding,
-             body) = encode(body, serializer=serializer)
+             body) = dumps(body, serializer=serializer)
         else:
             # If the programmer doesn't want us to serialize,
             # make sure content_encoding is set.
@@ -273,6 +271,8 @@ class Consumer(object):
     :keyword on_decode_error: see :attr:`on_decode_error`.
 
     """
+    ContentDisallowed = ContentDisallowed
+
     #: The connection/channel to use for this consumer.
     channel = None
 
@@ -351,13 +351,7 @@ class Consumer(object):
             self.auto_declare = auto_declare
         if on_decode_error is not None:
             self.on_decode_error = on_decode_error
-        self.accept = accept
-
-        if self.accept is not None:
-            self.accept = set(
-                n if '/' in n else registry.name_to_type[n]
-                for n in self.accept
-            )
+        self.accept = prepare_accept_content(accept)
 
         if self.channel:
             self.revive(self.channel)
@@ -472,7 +466,7 @@ class Consumer(object):
             self.channel.basic_cancel(tag)
 
     def consuming_from(self, queue):
-        """Returns :const:`True` if the consumer is currently
+        """Return :const:`True` if the consumer is currently
         consuming from queue'."""
         name = queue
         if isinstance(queue, Queue):
@@ -579,13 +573,13 @@ class Consumer(object):
 
     def _receive_callback(self, message):
         accept = self.accept
-        if accept is not None:
-            message.accept = accept
         on_m, channel, decoded = self.on_message, self.channel, None
         try:
             m2p = getattr(channel, 'message_to_python', None)
             if m2p:
                 message = m2p(message)
+            if accept is not None:
+                message.accept = accept
             decoded = None if on_m else message.decode()
         except Exception as exc:
             if not self.on_decode_error:

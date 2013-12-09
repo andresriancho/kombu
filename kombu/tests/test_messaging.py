@@ -1,21 +1,19 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 import anyjson
 import pickle
 
 from collections import defaultdict
-from mock import patch
 
 from kombu import Connection, Consumer, Producer, Exchange, Queue
 from kombu.exceptions import MessageStateError
 from kombu.utils import ChannelPromise
 
+from .case import Case, Mock, patch
 from .mocks import Transport
-from .utils import TestCase, Mock
 
 
-class test_Producer(TestCase):
+class test_Producer(Case):
 
     def setUp(self):
         self.exchange = Exchange('foo', 'direct')
@@ -218,7 +216,7 @@ class test_Producer(TestCase):
         self.assertTrue(p.on_return)
 
 
-class test_Consumer(TestCase):
+class test_Consumer(Case):
 
     def setUp(self):
         self.connection = Connection(transport=Transport)
@@ -255,6 +253,38 @@ class test_Consumer(TestCase):
         c._receive_callback(message)
         callback.assert_called_with(message)
         self.assertSetEqual(message.accept, c.accept)
+
+    def test_accept__content_disallowed(self):
+        conn = Connection('memory://')
+        q = Queue('foo', exchange=self.exchange)
+        p = conn.Producer()
+        p.publish(
+            {'complex': object()},
+            declare=[q], exchange=self.exchange, serializer='pickle',
+        )
+
+        callback = Mock(name='callback')
+        with conn.Consumer(queues=[q], callbacks=[callback]) as consumer:
+            with self.assertRaises(consumer.ContentDisallowed):
+                conn.drain_events(timeout=1)
+        self.assertFalse(callback.called)
+
+    def test_accept__content_allowed(self):
+        conn = Connection('memory://')
+        q = Queue('foo', exchange=self.exchange)
+        p = conn.Producer()
+        p.publish(
+            {'complex': object()},
+            declare=[q], exchange=self.exchange, serializer='pickle',
+        )
+
+        callback = Mock(name='callback')
+        with conn.Consumer(queues=[q], accept=['pickle'],
+                           callbacks=[callback]):
+            conn.drain_events(timeout=1)
+        self.assertTrue(callback.called)
+        body, message = callback.call_args[0]
+        self.assertTrue(body['complex'])
 
     def test_set_no_channel(self):
         c = Consumer(None)

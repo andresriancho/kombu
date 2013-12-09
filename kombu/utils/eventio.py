@@ -8,43 +8,42 @@ Evented IO support for multiple platforms.
 from __future__ import absolute_import
 
 import errno
+import select as __select__
 import socket
 
-from select import select as _selectf, error as _selecterr
+from kombu.five import int_types
 
-try:
-    from select import epoll
-except ImportError:
-    epoll = None  # noqa
+_selectf = __select__.select
+_selecterr = __select__.error
+epoll = getattr(__select__, 'epoll', None)
+kqueue = getattr(__select__, 'kqueue', None)
+kevent = getattr(__select__, 'kevent', None)
+KQ_EV_ADD = getattr(__select__, 'KQ_EV_ADD', 1)
+KQ_EV_DELETE = getattr(__select__, 'KQ_EV_DELETE', 2)
+KQ_EV_ENABLE = getattr(__select__, 'KQ_EV_ENABLE', 4)
+KQ_EV_CLEAR = getattr(__select__, 'KQ_EV_CLEAR', 32)
+KQ_EV_ERROR = getattr(__select__, 'KQ_EV_ERROR', 16384)
+KQ_EV_EOF = getattr(__select__, 'KQ_EV_EOF', 32768)
+KQ_FILTER_READ = getattr(__select__, 'KQ_FILTER_READ', -1)
+KQ_FILTER_WRITE = getattr(__select__, 'KQ_FILTER_WRITE', -2)
+KQ_FILTER_AIO = getattr(__select__, 'KQ_FILTER_AIO', -3)
+KQ_FILTER_VNODE = getattr(__select__, 'KQ_FILTER_VNODE', -4)
+KQ_FILTER_PROC = getattr(__select__, 'KQ_FILTER_PROC', -5)
+KQ_FILTER_SIGNAL = getattr(__select__, 'KQ_FILTER_SIGNAL', -6)
+KQ_FILTER_TIMER = getattr(__select__, 'KQ_FILTER_TIMER', -7)
+KQ_NOTE_LOWAT = getattr(__select__, 'KQ_NOTE_LOWAT', 1)
+KQ_NOTE_DELETE = getattr(__select__, 'KQ_NOTE_DELETE', 1)
+KQ_NOTE_WRITE = getattr(__select__, 'KQ_NOTE_WRITE', 2)
+KQ_NOTE_EXTEND = getattr(__select__, 'KQ_NOTE_EXTEND', 4)
+KQ_NOTE_ATTRIB = getattr(__select__, 'KQ_NOTE_ATTRIB', 8)
+KQ_NOTE_LINK = getattr(__select__, 'KQ_NOTE_LINK', 16)
+KQ_NOTE_RENAME = getattr(__select__, 'KQ_NOTE_RENAME', 32)
+KQ_NOTE_REVOKE = getattr(__select__, 'kQ_NOTE_REVOKE', 64)
 
-try:
-    from select import (
-        kqueue,
-        kevent,
-        KQ_EV_ADD,
-        KQ_EV_DELETE,
-        KQ_EV_EOF,
-        KQ_EV_ERROR,
-        KQ_EV_ENABLE,
-        KQ_EV_CLEAR,
-        KQ_FILTER_WRITE,
-        KQ_FILTER_READ,
-        KQ_FILTER_VNODE,
-        KQ_NOTE_WRITE,
-        KQ_NOTE_EXTEND,
-        KQ_NOTE_DELETE,
-        KQ_NOTE_ATTRIB,
-    )
-except ImportError:
-    kqueue = kevent = None                                      # noqa
-    KQ_EV_ADD = KQ_EV_DELETE = KQ_EV_EOF = KQ_EV_ERROR = 0      # noqa
-    KQ_EV_ENABLE = KQ_EV_CLEAR = KQ_EV_VNODE = 0                # noqa
-    KQ_FILTER_WRITE = KQ_FILTER_READ = 0                        # noqa
-    KQ_NOTE_WRITE = KQ_NOTE_EXTEND = 0                          # noqa
-    KQ_NOTE_ATTRIB = KQ_NOTE_DELETE = 0                         # noqa
 
 from kombu.syn import detect_environment
 
+from . import fileno
 from .compat import get_errno
 
 __all__ = ['poll']
@@ -186,9 +185,9 @@ class _select(Poller):
                      self._efd) = set(), set(), set()
 
     def register(self, fd, events):
+        fd = fileno(fd)
         if events & ERR:
             self._efd.add(fd)
-            self._rfd.add(fd)
         if events & WRITE:
             self._wfd.add(fd)
         if events & READ:
@@ -203,6 +202,7 @@ class _select(Poller):
                     self.unregister(fd)
 
     def unregister(self, fd):
+        fd = fileno(fd)
         self._rfd.discard(fd)
         self._wfd.discard(fd)
         self._efd.discard(fd)
@@ -221,21 +221,23 @@ class _select(Poller):
 
         events = {}
         for fd in read:
-            if not isinstance(fd, int):
+            if not isinstance(fd, int_types):
                 fd = fd.fileno()
             events[fd] = events.get(fd, 0) | READ
         for fd in write:
-            if not isinstance(fd, int):
+            if not isinstance(fd, int_types):
                 fd = fd.fileno()
             events[fd] = events.get(fd, 0) | WRITE
         for fd in error:
-            if not isinstance(fd, int):
+            if not isinstance(fd, int_types):
                 fd = fd.fileno()
             events[fd] = events.get(fd, 0) | ERR
         return list(events.items())
 
     def close(self):
-        pass
+        self._rfd.clear()
+        self._wfd.clear()
+        self._efd.clear()
 
 
 def _get_poller():

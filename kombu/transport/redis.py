@@ -15,17 +15,13 @@ from time import time
 
 from anyjson import loads, dumps
 
-from kombu.exceptions import (
-    InconsistencyError,
-    StdConnectionError,
-    StdChannelError,
-    VersionMismatch,
-)
-from kombu.five import Empty, values
+from kombu.exceptions import InconsistencyError, VersionMismatch
+from kombu.five import Empty, values, string_t
 from kombu.log import get_logger
 from kombu.utils import cached_property, uuid
 from kombu.utils.eventio import poll, READ, ERR
 from kombu.utils.encoding import bytes_to_str
+from kombu.utils.url import _parse_url
 
 NO_ROUTE_ERROR = """
 Cannot route message for exchange {0!r}: Table empty or key no longer exists.
@@ -34,7 +30,7 @@ Probably the key ({1!r}) has been removed from the Redis database.
 
 try:
     from billiard.util import register_after_fork
-except ImportError:
+except ImportError:  # pragma: no cover
     try:
         from multiprocessing.util import register_after_fork  # noqa
     except ImportError:
@@ -43,13 +39,14 @@ except ImportError:
 
 try:
     import redis
-except ImportError:
-    redis = None  # noqa
+except ImportError:  # pragma: no cover
+    redis = None     # noqa
 
 
 from . import virtual
 
 logger = get_logger('kombu.transport.redis')
+crit, warn = logger.critical, logger.warn
 
 DEFAULT_PORT = 6379
 DEFAULT_DB = 0
@@ -128,6 +125,8 @@ class QoS(virtual.QoS):
         super(QoS, self).ack(delivery_tag)
 
     def reject(self, delivery_tag, requeue=False):
+        if requeue:
+            self.restore_by_tag(delivery_tag, leftmost=True)
         self.ack(delivery_tag)
 
     @contextmanager
@@ -160,13 +159,13 @@ class QoS(virtual.QoS):
             except MutexHeld:
                 pass
 
-    def restore_by_tag(self, tag, client=None):
+    def restore_by_tag(self, tag, client=None, leftmost=False):
         with self.channel.conn_or_acquire(client) as client:
             p, _, _ = self._remove_from_indices(
                 tag, client.pipeline().hget(self.unacked_key, tag)).execute()
             if p:
-                M, EX, RK = loads(p)
-                self.channel._do_restore_message(M, EX, RK, client)
+                M, EX, RK = loads(bytes_to_str(p))  # json is unicode
+                self.channel._do_restore_message(M, EX, RK, client, leftmost)
 
     @cached_property
     def unacked_key(self):
@@ -266,7 +265,7 @@ class MultiChannelPoller(object):
                 num=channel.unacked_restore_limit,
             )
 
-    def on_poll_empty(self):
+    def maybe_restore_messages(self):
         for channel in self._channels:
             if channel.active_queues:
                 # only need to do this once, as they are not local to channel.
@@ -274,11 +273,14 @@ class MultiChannelPoller(object):
                     num=channel.unacked_restore_limit,
                 )
 
+    def on_readable(self, fileno):
+        chan, type = self._fd_to_chan[fileno]
+        if chan.qos.can_consume():
+            return chan.handlers[type]()
+
     def handle_event(self, fileno, event):
         if event & READ:
-            chan, type = self._fd_to_chan[fileno]
-            if chan.qos.can_consume():
-                return chan.handlers[type](), self
+            return self.on_readable(fileno), self
         elif event & ERR:
             chan, type = self._fd_to_chan[fileno]
             chan._poll_error(type)
@@ -299,7 +301,7 @@ class MultiChannelPoller(object):
 
         # - no new data, so try to restore messages.
         # - reset active redis commands.
-        self.on_poll_empty()
+        self.maybe_restore_messages()
 
         raise Empty()
 
@@ -315,6 +317,7 @@ class Channel(virtual.Channel):
     _subclient = None
     supports_fanout = True
     keyprefix_queue = '_kombu.binding.%s'
+    keyprefix_fanout = '/{db}.'
     sep = '\x06\x16'
     _in_poll = False
     _in_listen = False
@@ -329,6 +332,12 @@ class Channel(virtual.Channel):
     priority_steps = PRIORITY_STEPS
     socket_timeout = None
     max_connections = 10
+    #: Transport option to enable disable fanout keyprefix.
+    #: Should be enabled by default, but that is not
+    #: backwards compatible.  Can also be string, in which
+    #: case it changes the default prefix ('/{db}.') into to something
+    #: else.  The prefix must include a leading slash and a trailing dot.
+    fanout_prefix = False
     _pool = None
 
     from_transport_options = (
@@ -340,6 +349,7 @@ class Channel(virtual.Channel):
          'unacked_mutex_expire',
          'visibility_timeout',
          'unacked_restore_limit',
+         'fanout_prefix',
          'socket_timeout',
          'max_connections',
          'priority_steps')  # <-- do not add comma here!
@@ -360,6 +370,14 @@ class Channel(virtual.Channel):
         self._fanout_to_queue = {}
         self.handlers = {'BRPOP': self._brpop_read, 'LISTEN': self._receive}
 
+        if self.fanout_prefix:
+            if isinstance(self.fanout_prefix, string_t):
+                self.keyprefix_fanout = self.fanout_prefix
+        else:
+            # previous versions did not set a fanout, so cannot enable
+            # by default.
+            self.keyprefix_fanout = ''
+
         # Evaluate connection.
         try:
             self.client.info()
@@ -379,7 +397,8 @@ class Channel(virtual.Channel):
         if self._pool is not None:
             self._pool.disconnect()
 
-    def _do_restore_message(self, payload, exchange, routing_key, client=None):
+    def _do_restore_message(self, payload, exchange, routing_key,
+                            client=None, leftmost=False):
         with self.conn_or_acquire(client) as client:
             try:
                 try:
@@ -387,12 +406,13 @@ class Channel(virtual.Channel):
                 except KeyError:
                     pass
                 for queue in self._lookup(exchange, routing_key):
-                    client.lpush(queue, dumps(payload))
+                    (client.lpush if leftmost else client.rpush)(
+                        queue, dumps(payload),
+                    )
             except Exception:
-                logger.critical('Could not restore message: %r', payload,
-                                exc_info=True)
+                crit('Could not restore message: %r', payload, exc_info=True)
 
-    def _restore(self, message, payload=None):
+    def _restore(self, message, leftmost=False):
         tag = message.delivery_tag
         with self.conn_or_acquire() as client:
             P, _ = client.pipeline() \
@@ -400,8 +420,11 @@ class Channel(virtual.Channel):
                 .hdel(self.unacked_key, tag) \
                 .execute()
             if P:
-                M, EX, RK = loads(P)
-                self._do_restore_message(M, EX, RK, client)
+                M, EX, RK = loads(bytes_to_str(P))  # json is unicode
+                self._do_restore_message(M, EX, RK, client, leftmost)
+
+    def _restore_at_beginning(self, message):
+        return self._restore(message, leftmost=True)
 
     def _next_delivery_tag(self):
         return uuid()
@@ -430,7 +453,8 @@ class Channel(virtual.Channel):
         return ret
 
     def _subscribe(self):
-        keys = [self._fanout_queues[queue]
+        prefix = self.keyprefix_fanout
+        keys = [''.join([prefix, self._fanout_queues[queue]])
                 for queue in self.active_fanout_queues]
         if not keys:
             return
@@ -457,11 +481,20 @@ class Channel(virtual.Channel):
             response = c.parse_response()
         except self.connection_errors:
             self._in_listen = False
+            raise Empty()
         if response is not None:
             payload = self._handle_message(c, response)
-            if payload['type'] == 'message':
-                return (loads(payload['data']),
-                        self._fanout_to_queue[payload['channel']])
+            if bytes_to_str(payload['type']) == 'message':
+                channel = bytes_to_str(payload['channel'])
+                if payload['data']:
+                    if channel[0] == '/':
+                        _, _, channel = channel.partition('.')
+                    try:
+                        message = loads(bytes_to_str(payload['data']))
+                    except (TypeError, ValueError):
+                        warn('Cannot process event on channel %r: %r',
+                             channel, payload, exc_info=1)
+                    return message, self._fanout_to_queue[channel]
         raise Empty()
 
     def _brpop_start(self, timeout=1):
@@ -487,9 +520,8 @@ class Channel(virtual.Channel):
             if dest__item:
                 dest, item = dest__item
                 dest = bytes_to_str(dest).rsplit(self.sep, 1)[0]
-                item = bytes_to_str(item)
                 self._rotate_cycle(dest)
-                return loads(item), dest
+                return loads(bytes_to_str(item)), dest
             else:
                 raise Empty()
         finally:
@@ -506,7 +538,7 @@ class Channel(virtual.Channel):
             for pri in PRIORITY_STEPS:
                 item = client.rpop(self._q_for_pri(queue, pri))
                 if item:
-                    return loads(item)
+                    return loads(bytes_to_str(item))
             raise Empty()
 
     def _size(self, queue):
@@ -538,7 +570,9 @@ class Channel(virtual.Channel):
     def _put_fanout(self, exchange, message, **kwargs):
         """Deliver fanout message."""
         with self.conn_or_acquire() as client:
-            client.publish(exchange, dumps(message))
+            client.publish(
+                ''.join([self.keyprefix_fanout, exchange]), dumps(message),
+            )
 
     def _new_queue(self, queue, auto_delete=False, **kwargs):
         if auto_delete:
@@ -610,31 +644,49 @@ class Channel(virtual.Channel):
                     pass
         super(Channel, self).close()
 
-    def _connparams(self):
-        conninfo = self.connection.client
-        database = conninfo.virtual_host
-        if not isinstance(database, int):
-            if not database or database == '/':
-                database = DEFAULT_DB
-            elif database.startswith('/'):
-                database = database[1:]
+    def _prepare_virtual_host(self, vhost):
+        if not isinstance(vhost, int):
+            if not vhost or vhost == '/':
+                vhost = DEFAULT_DB
+            elif vhost.startswith('/'):
+                vhost = vhost[1:]
             try:
-                database = int(database)
+                vhost = int(vhost)
             except ValueError:
                 raise ValueError(
-                    'Database name must be int between 0 and limit - 1')
-        return {'host': conninfo.hostname or '127.0.0.1',
-                'port': conninfo.port or DEFAULT_PORT,
-                'db': database,
-                'password': conninfo.password,
-                'max_connections': self.max_connections,
-                'socket_timeout': self.socket_timeout}
+                    'Database is int between 0 and limit - 1, not {0}'.format(
+                        vhost,
+                    ))
+        return vhost
+
+    def _connparams(self):
+        conninfo = self.connection.client
+        connparams = {'host': conninfo.hostname or '127.0.0.1',
+                      'port': conninfo.port or DEFAULT_PORT,
+                      'virtual_host': conninfo.virtual_host,
+                      'password': conninfo.password,
+                      'max_connections': self.max_connections,
+                      'socket_timeout': self.socket_timeout}
+        host = connparams['host']
+        if '://' in host:
+            scheme, _, _, _, _, path, query = _parse_url(host)
+            if scheme == 'socket':
+                connparams.update({
+                    'connection_class': redis.UnixDomainSocketConnection,
+                    'path': '/' + path}, **query)
+            connparams.pop('host', None)
+            connparams.pop('port', None)
+        connparams['db'] = self._prepare_virtual_host(
+            connparams.pop('virtual_host', None))
+        return connparams
 
     def _create_client(self):
         return self.Client(connection_pool=self.pool)
 
     def _get_pool(self):
-        return redis.ConnectionPool(**self._connparams())
+        params = self._connparams()
+        self.keyprefix_fanout = self.keyprefix_fanout.format(db=params['db'])
+        return redis.ConnectionPool(**params)
 
     def _get_client(self):
         if redis.VERSION < (2, 4, 4):
@@ -708,11 +760,12 @@ class Channel(virtual.Channel):
         return self._queue_cycle[0:active]
 
     def _rotate_cycle(self, used):
-        """
-        Move most recently used queue to end of list
-        """
-        index = self._queue_cycle.index(used)
-        self._queue_cycle.append(self._queue_cycle.pop(index))
+        """Move most recently used queue to end of list."""
+        cycle = self._queue_cycle
+        try:
+            cycle.append(cycle.pop(cycle.index(used)))
+        except ValueError:
+            pass
 
     def _get_response_error(self):
         from redis import exceptions
@@ -745,24 +798,23 @@ class Transport(virtual.Transport):
     def driver_version(self):
         return redis.__version__
 
-    def on_poll_init(self, poller):
-        """Called when hub starts."""
-        self.cycle.on_poll_init(poller)
-
-    def on_poll_start(self):
-        """Called by hub before each ``poll()``"""
+    def register_with_event_loop(self, connection, loop):
         cycle = self.cycle
-        cycle.on_poll_start()
-        return dict((fd, self.handle_event) for fd in cycle.fds)
+        cycle.on_poll_init(loop.poller)
+        cycle_poll_start = cycle.on_poll_start
+        add_reader = loop.add_reader
+        on_readable = self.on_readable
 
-    def on_poll_empty(self):
-        self.cycle.on_poll_empty()
+        def on_poll_start():
+            cycle_poll_start()
+            [add_reader(fd, on_readable, fd) for fd in cycle.fds]
+        loop.on_tick.add(on_poll_start)
+        loop.call_repeatedly(10, cycle.maybe_restore_messages)
 
-    def handle_event(self, fileno, event):
+    def on_readable(self, fileno):
         """Handle AIO event for one of our file descriptors."""
-        ret = self.cycle.handle_event(fileno, event)
-        if ret:
-            item, channel = ret
+        item = self.cycle.on_readable(fileno)
+        if item:
             message, queue = item
             if not queue or queue not in self._callbacks:
                 raise KeyError(
@@ -778,12 +830,16 @@ class Transport(virtual.Transport):
             DataError = exceptions.InvalidData
         else:
             DataError = exceptions.DataError
-        return ((StdConnectionError,
-                 InconsistencyError,
-                 socket.timeout,
-                 exceptions.ConnectionError,
-                 exceptions.AuthenticationError),
-                (DataError,
-                 exceptions.InvalidResponse,
-                 exceptions.ResponseError,
-                 StdChannelError))
+        return (
+            (virtual.Transport.connection_errors + (
+                InconsistencyError,
+                socket.error,
+                IOError,
+                OSError,
+                exceptions.ConnectionError,
+                exceptions.AuthenticationError)),
+            (virtual.Transport.channel_errors + (
+                DataError,
+                exceptions.InvalidResponse,
+                exceptions.ResponseError)),
+        )

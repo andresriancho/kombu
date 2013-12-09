@@ -4,33 +4,430 @@
  Change history
 ================
 
+.. _version-3.0.7:
+
+3.0.7
+=====
+:release-date: 2013-12-02 04:00 P.M UTC
+:release-by: Ask Solem
+
+- Fixes Python 2.6 compatibility.
+
+- Redis: Fixes 'bad file descriptor' issue.
+
+.. _version-3.0.6:
+
+3.0.6
+=====
+:release-date: 2013-11-21 04:50 P.M UTC
+:release-by: Ask Solem
+
+- Timer: No longer attempts to hash keyword arguments (Issue #275).
+
+- Async: Did not account for the long type for file descriptors.
+
+    Fix contributed by Fabrice Rabaute.
+
+- PyPy: kqueue support was broken.
+
+- Redis: Bad pub/sub payloads no longer crashes the consumer.
+
+- Redis: Unix socket URLs can now specify a virtual host by including
+  it as a query parameter.
+
+    Example URL specifying a virtual host using database number 3::
+
+        redis+socket:///tmp/redis.sock?virtual_host=3
+
+- ``kombu.VERSION`` is now a named tuple.
+
+.. _version-3.0.5:
+
+3.0.5
+=====
+:release-date: 2013-11-15 11:00 P.M UTC
+:release-by: Ask Solem
+
+- Now depends on :mod:`amqp` 1.3.3.
+
+- Redis: Fixed Python 3 compatibility problem (Issue #270).
+
+- MongoDB: Fixed problem with URL parsing when authentication used.
+
+    Fix contributed by dongweiming.
+
+- pyamqp: Fixed small issue when publishing the message and
+  the property dictionary was set to None.
+
+    Fix contributed by Victor Garcia.
+
+- Fixed problem in ``repr(LaxBoundedSemaphore)``.
+
+    Fix contributed by Antoine Legrand.
+
+- Tests now passing on Python 3.3.
+
+.. _version-3.0.4:
+
+3.0.4
+=====
+:release-date: 2013-11-08 1:00 P.M UTC
+:release-by: Ask Solem
+
+- common.QoS: ``decrement_eventually`` now makes sure the value
+  does not go below 1 if a prefetch count is enabled.
+
+.. _version-3.0.3:
+
+3.0.3
+=====
+:release-date: 2013-11-04 3:00 P.M UTC
+:release-by: Ask Solem
+
+- SQS: Properly reverted patch that caused delays between messages.
+
+    Contributed by James Saryerwinnie
+
+- select: Clear all registerd fds on poller.cloe
+
+- Eventloop: unregister if EBADF raised.
+
+.. _version-3.0.2:
+
+3.0.2
+=====
+:release-date: 2013-10-29 2:00 P.M UTC
+:release-by: Ask Solem
+
+- Now depends on :mod:`amqp` version 1.3.2.
+
+- select: Fixed problem where unregister did not properly remove
+  the fd.
+
+.. _version-3.0.1:
+
+3.0.1
+=====
+:release-date: 2013-10-24 04:00 P.M UTC
+:release-by: Ask Solem
+
+- Now depends on :mod:`amqp` version 1.3.1.
+
+- Redis: New option ``fanout_keyprefix``
+
+    This transport option is recommended for all users as it ensures
+    that broadcast (fanout) messages sent is only seen by the current
+    virtual host::
+
+        Connection('redis://', transport_options={'fanout_keyprefix': True})
+
+    However, enabling this means that you cannot send or receive messages
+    from older Kombu versions so make sure all of your participants
+    are upgraded and have the transport option enabled.
+
+    This will be the default behavior in Kombu 4.0.
+
+- Distribution: Removed file ``requirements/py25.txt``.
+
+- MongoDB: Now disables ``auto_start_request``.
+
+- MongoDB: Enables ``use_greenlets`` if eventlet/gevent used.
+
+- Pidbox: Fixes problem where expires header was None,
+  which is a value not supported by the amq protocol.
+
+- ConsumerMixin: New ``consumer_context`` method for starting
+  the consumer without draining events.
+
 .. _version-3.0.0:
 
 3.0.0
 =====
-:release-date: TBA
+:release-date: 2013-10-14 04:00 P.M BST
+:release-by: Ask Solem
+
+- Now depends on :mod:`amqp` version 1.3.
 
 - No longer supports Python 2.5
 
+    The minimum Python version supported is now Python 2.6.0 for Python2,
+    and Python 3.3 for Python3.
+
+- Dual codebase supporting both Python 2 and 3.
+
+    No longer using ``2to3``, making it easier to maintain support for
+    both versions.
+
 - pickle, yaml and msgpack deserialization is now disabled by default.
 
-    To enable insecure serializers you have to call:
+    This means that Kombu will by default refuse to handle any content type other
+    than json.
+
+    Pickle is known to be a security concern as it will happily
+    load any object that is embedded in a pickle payload, and payloads
+    can be crafted to do almost anything you want.  The default
+    serializer in Kombu is json but it also supports a number
+    of other serialization formats that it will evaluate if received:
+    including pickle.
+
+    It was always assumed that users were educated about the security
+    implications of pickle, but in hindsight we don't think users
+    should be expected to secure their services if we have the ability to
+    be secure by default.
+
+    By disabling any content type that the user did not explicitly
+    want enabled we ensure that the user must be conscious when they
+    add pickle as a serialization format to support.
+
+    The other built-in serializers (yaml and msgpack) are also disabled
+    even though they aren't considered insecure [#f1]_ at this point.
+    Instead they're disabled so that if a security flaw is found in one of these
+    libraries in the future, you will only be affected if you have
+    explicitly enabled them.
+
+    To have your consumer accept formats other than json you have to
+    explicitly add the wanted formats to a white-list of accepted
+    content types::
+
+        >>> c = Consumer(conn, accept=['json', 'pickle', 'msgpack'])
+
+    or when using synchronous access::
+
+        >>> msg = queue.get(accept=['json', 'pickle', 'msgpack'])
+
+    The ``accept`` argument was first supported for consumers in version
+    2.5.10, and first supported by ``Queue.get`` in version 2.5.15
+    so to stay compatible with previous versions you can enable
+    the previous behavior:
 
         >>> from kombu import enable_insecure_serializers
         >>> enable_insecure_serializers()
+
+    But note that this has global effect, so be very careful should you use it.
+
+    .. rubric:: Footnotes
+
+    .. [#f1] The PyYAML library has a :func:`yaml.load` function with some of the
+             same security implications as pickle, but Kombu uses the
+             :func:`yaml.safe_load` function which is not known to be affected.
+
+- kombu.async: Experimental event loop implementation.
+
+    This code was previously in Celery but was moved here
+    to make it easier for async transport implementations.
+
+    The API is meant to match the Tulip API which will be included
+    in Python 3.4 as the ``asyncio`` module.  It's not a complete
+    implementation obviously, but the goal is that it will be easy
+    to change to it once that is possible.
+
+- Utility function ``kombu.common.ipublish`` has been removed.
+
+    Use ``Producer(..., retry=True)`` instead.
+
+- Utility function ``kombu.common.isend_reply`` has been removed
+
+    Use ``send_reply(..., retry=True)`` instead.
+
+- ``kombu.common.entry_to_queue`` and ``kombu.messaging.entry_to_queue``
+  has been removed.
+
+    Use ``Queue.from_dict(name, **options)`` instead.
+
+- Redis: Messages are now restored at the end of the list.
+
+    Contributed by Mark Lavin.
+
+- ``StdConnectionError`` and ``StdChannelError`` is removed
+    and :exc:`amqp.ConnectionError` and :exc:`amqp.ChannelError` is used
+    instead.
+
+- Message object implementation has moved to :class:`kombu.message.Message`.
+
+- Serailization: Renamed functions encode/decode to
+  :func:`~kombu.serialization.dumps` and :func:`~kombu.serialization.loads`.
+
+    For backward compatibility the old names are still available as aliases.
+
+- The ``kombu.log.anon_logger`` function has been removed.
+
+    Use :func:`~kombu.log.get_logger` instead.
+
+- ``queue_declare`` now returns namedtuple with ``queue``, ``message_count``,
+  and ``consumer_count`` fields.
+
+- LamportClock: Can now set lock class
+
+- :mod:`kombu.utils.clock`: Utilities for ordering events added.
+
+- :class:`~kombu.simple.SimpleQueue` now allows you to override
+  the exchange type used.
+
+    Contributed by Vince Gonzales.
+
+- Zookeeper transport updated to support new changes in the :mod:`kazoo`
+  library.
+
+    Contributed by Mahendra M.
+
+- pyamqp/librabbitmq: Transport options are now forwarded as keyword arguments
+    to the underlying connection (Issue #214).
+
+- Transports may now distinguish between recoverable and irrecoverable
+  connection and channel errors.
+
+- ``kombu.utils.Finalize`` has been removed: Use
+  :mod:`multiprocessing.util.Finalize` instead.
+
+- Memory transport now supports the fanout exchange type.
+
+    Contributed by Davanum Srinivas.
+
+- Experimental new `Pyro`_ transport (:mod:`kombu.transport.pyro`).
+
+    Contributed by Tommie McAfee.
+
+.. _`Pyro`: http://pythonhosted.org/Pyro
+
+- Experimental new `SoftLayer MQ`_ transport (:mod:`kombu.transport.SLMQ`).
+
+    Contributed by Kevin McDonald
+
+.. _`SoftLayer MQ`: http://www.softlayer.com/services/additional/message-queue
+
+- Eventio: Kqueue breaks in subtle ways so select is now used instead.
+
+- SQLAlchemy transport: Can now specify table names using the
+  ``queue_tablename`` and ``message_tablename`` transport options.
+
+    Contributed by Ryan Petrello.
+
+Redis transport: Now supports using local UNIX sockets to communicate with the
+  Redis server (Issue #1283)
+
+    To connect using a UNIX socket you have to use the ``redis+socket``
+    URL-prefix: ``redis+socket:///tmp/redis.sock``.
+
+    This functionality was merged from the `celery-redis-unixsocket`_ project.
+    Contributed by Maxime Rouyrre.
+
+ZeroMQ transport: drain_events now supports timeout.
+
+    Contributed by Jesper Thomschütz.
+
+.. _`celery-redis-unixsocket`:
+    https://github.com/piquadrat/celery-redis-unixsocket
+
+.. _version-2.5.16:
+
+2.5.16
+======
+:release-date: 2013-10-04 03:30 P.M BST
+:release-by: Ask Solem
+
+- Python3: Fixed problem with dependencies not being installed.
+
+.. _version-2.5.15:
+
+2.5.15
+======
+:release-date: 2013-10-04 03:30 P.M BST
+:release-by: Ask Solem
+
+- Declaration cache: Now only keeps hash of declaration
+  so that it does not keep a reference to the channel.
+
+- Declaration cache: Now respects ``entity.can_cache_declaration``
+  attribute.
+
+- Fixes Python 2.5 compatibility.
+
+- Fixes tests after python-msgpack changes.
+
+- ``Queue.get``: Now supports ``accept`` argument.
+
+.. _version-2.5.14:
+
+2.5.14
+======
+:release-date: 2013-08-23 17:00 P.M BST
+:release-by: Ask Solem
+
+- safe_str did not work properly resulting in
+  :exc:`UnicodeDecodeError` (Issue #248).
+
+.. _version-2.5.13:
+
+2.5.13
+======
+:release-date: 2013-08-16 16:00 P.M BST
+:release-by: Ask Solem
+
+- Now depends on :mod:`amqp` 1.0.13
+
+- Fixed typo in Django functional tests.
+
+- safe_str now returns Unicode in Python 2.x
+
+    Fix contributed by Germán M. Bravo.
+
+- amqp: Transport options are now merged with arguments
+  supplied to the connection.
+
+- Tests no longer depends on distribute, which was deprecated
+  and merged back into setuptools.
+
+    Fix contributed by Sascha Peilicke.
+
+- ConsumerMixin now also restarts on channel related errors.
+
+    Fix contributed by Corentin Ardeois.
+
+.. _version-2.5.12:
+
+2.5.12
+======
+:release-date: 2013-06-28 15:30 P.M BST
+:release-by: Ask Solem
+
+- Redis: Ignore errors about keys missing in the round-robin cycle.
+
+- Fixed test suite errors on Python 3.
+
+- Fixed msgpack test failures.
 
 .. _version-2.5.11:
 
 2.5.11
 ======
-:release-date: TBA
+:release-date: 2013-06-25 14:30 P.M BST
+:release-by: Ask Solem
+
+- Now depends on amqp 1.0.12 (Py3 compatibility issues).
+
+- MongoDB:  Removed cause of a "database name in URI is being ignored"
+  warning.
+
+    Fix by Flavio Percoco Premoli
 
 - Adds ``passive`` option to :class:`~kombu.Exchange`.
 
+    Setting this flag means that the exchange will not be declared by kombu,
+    but that it must exist already (or an exception will be raised).
+
     Contributed by Rafal Malinowski
 
-- librabbitmq:  Now raises :exc:`NotImplementedError`
-  if ``ssl`` option enabled.
+- Connection.info() now gives the current hostname and not the list of
+  available hostnames.
+
+    Fix contributed by John Shuping.
+
+- pyamqp: Transport options are now forwarded as kwargs to ``amqp.Connection``.
+
+- librabbitmq: Transport options are now forwarded as kwargs to
+  ``librabbitmq.Connection``.
+
+- librabbitmq:  Now raises :exc:`NotImplementedError` if SSL is enabled.
 
     The librabbitmq library does not support ssl,
     but you can use stunnel or change to the ``pyamqp://`` transport
@@ -38,13 +435,35 @@
 
     Fix contributed by Dan LaMotte.
 
+- librabbitmq: Fixed a cyclic reference at connection close.
+
 - eventio: select implementation now removes bad file descriptors.
+
+- eventio: Fixed Py3 compatibility problems.
+
+- Functional tests added for py-amqp and librabbitmq transports.
+
+- Resource.force_close_all no longer uses a mutex.
+
+- Pidbox: Now ignores `IconsistencyError` when sending replies,
+  as this error simply means that the client may no longer be alive.
+
+- Adds new :meth:`Connection.collect <~kombu.Connection.collect>` method,
+  that can be used to clean up after connections without I/O.
+
+- ``queue_bind`` is no longer called for queues bound to
+  the "default exchange" (Issue #209).
+
+    Contributed by Jonathan Halcrow.
+
+- The max_retries setting for retries was not respected correctly (off by one).
 
 .. _version-2.5.10:
 
 2.5.10
 ======
 :release-date: 2013-04-11 18:10 P.M BST
+:release-by: Ask Solem
 
 Note about upcoming changes for Kombu 3.0
 -----------------------------------------
@@ -90,6 +509,7 @@ Changes
 2.5.9
 =====
 :release-date: 2013-04-08 05:07 P.M BST
+:release-by: Ask Solem
 
 - Pidbox: Now warns if there are multiple nodes consuming from
   the same pidbox.
@@ -122,6 +542,7 @@ Changes
 2.5.8
 =====
 :release-date: 2013-03-21 04:00 P.M UTC
+:release-by: Ask Solem
 
 - Now depends on :mod:`amqp` 1.0.10 which fixes a Python 3 compatibility error.
 
@@ -156,6 +577,7 @@ Changes
 2.5.7
 =====
 :release-date: 2013-03-08 01:00 P.M UTC
+:release-by: Ask Solem
 
 - Now depends on amqp 1.0.9
 
@@ -178,6 +600,7 @@ Changes
 2.5.6
 =====
 :release-date: 2013-02-08 01:00 P.M UTC
+:release-by: Ask Solem
 
 - Now depends on amqp 1.0.8 which works around a bug found on some
   Python 2.5 installations where 2**32 overflows to 0.
@@ -187,6 +610,7 @@ Changes
 2.5.5
 =====
 :release-date: 2013-02-07 17:00 P.M UTC
+:release-by: Ask Solem
 
 SQS: Now supports long polling (Issue #176).
 
@@ -224,6 +648,7 @@ SQS: Now supports long polling (Issue #176).
 2.5.4
 =====
 :release-date: 2012-12-10 12:35 P.M UTC
+:release-by: Ask Solem
 
 - Fixed problem with connection clone and multiple URLs (Issue #182).
 
@@ -240,18 +665,21 @@ SQS: Now supports long polling (Issue #176).
 2.5.3
 =====
 :release-date: 2012-11-29 12:35 P.M UTC
+:release-by: Ask Solem
 
 - Pidbox: Fixed compatibility with Python 2.6
 
 2.5.2
 =====
 :release-date: 2012-11-29 12:35 P.M UTC
+:release-by: Ask Solem
 
 .. _version-2.5.2:
 
 2.5.2
 =====
 :release-date: 2012-11-29 12:35 P.M UTC
+:release-by: Ask Solem
 
 - [Redis] Fixed connection leak and added a new 'max_connections' transport
   option.
@@ -261,6 +689,7 @@ SQS: Now supports long polling (Issue #176).
 2.5.1
 =====
 :release-date: 2012-11-28 12:45 P.M UTC
+:release-by: Ask Solem
 
 - Fixed bug where return value of Queue.as_dict could not be serialized with
   JSON (Issue #177).
@@ -270,6 +699,7 @@ SQS: Now supports long polling (Issue #176).
 2.5.0
 =====
 :release-date: 2012-11-27 04:00 P.M UTC
+:release-by: Ask Solem
 
 - `py-amqp`_ is now the new default transport, replacing ``amqplib``.
 
@@ -389,6 +819,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.10
 ======
 :release-date: 2012-11-22 06:00 P.M UTC
+:release-by: Ask Solem
 
 - The previous versions connection pool changes broke Redis support so that
   it would always connect to localhost (default setting) no matter what
@@ -399,6 +830,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.9
 =====
 :release-date: 2012-11-21 03:00 P.M UTC
+:release-by: Ask Solem
 
 - Redis: Fixed race condition that could occur while trying to restore
   messages (Issue #171).
@@ -427,6 +859,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.8
 =====
 :release-date: 2012-11-02 05:00 P.M UTC
+:release-by: Ask Solem
 
 - Redis:  Improved fair queue cycle implementation (Issue #166).
 
@@ -474,6 +907,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.7
 =====
 :release-date: 2012-09-18 03:00 P.M BST
+:release-by: Ask Solem
 
 - Virtual: Unknown exchanges now default to 'direct' when sending a message.
 
@@ -495,6 +929,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.6
 =====
 :release-date: 2012-09-12 03:00 P.M BST
+:release-by: Ask Solem
 
 - Adds additional compatibility dependencies:
 
@@ -512,6 +947,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.5
 =====
 :release-date: 2012-08-30 03:36 P.M BST
+:release-by: Ask Solem
 
 - Last version broke installtion on PyPy and Jython due
   to test requirements clean-up.
@@ -521,6 +957,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.4
 =====
 :release-date: 2012-08-29 04:00 P.M BST
+:release-by: Ask Solem
 
 - amqplib: Fixed a bug with asynchronously reading large messages.
 
@@ -533,6 +970,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.3
 =====
 :release-date: 2012-08-25 10:30 P.M BST
+:release-by: Ask Solem
 
 - Fixed problem with amqp transport alias (Issue #154).
 
@@ -541,6 +979,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.2
 =====
 :release-date: 2012-08-24 05:00 P.M BST
+:release-by: Ask Solem
 
 - Having an empty transport name broke in 2.4.1.
 
@@ -550,6 +989,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.1
 =====
 :release-date: 2012-08-24 04:00 P.M BST
+:release-by: Ask Solem
 
 - Redis: Fixed race condition that could cause the consumer to crash (Issue #151)
 
@@ -565,6 +1005,7 @@ SQS: Now supports long polling (Issue #176).
 2.4.0
 =====
 :release-date: 2012-08-17 08:00 P.M BST
+:release-by: Ask Solem
 
 - New experimental :mod:`ZeroMQ <kombu.transport.zmq` transport.
 
@@ -592,6 +1033,7 @@ SQS: Now supports long polling (Issue #176).
 2.3.2
 =====
 :release-date: 2012-08-01 06:00 P.M BST
+:release-by: Ask Solem
 
 - Fixes problem with deserialization in Python 3.
 
@@ -600,6 +1042,7 @@ SQS: Now supports long polling (Issue #176).
 2.3.1
 =====
 :release-date: 2012-08-01 04:00 P.M BST
+:release-by: Ask Solem
 
 - librabbitmq: Can now handle messages that does not have a
   content_encoding/content_type set (Issue #149).
@@ -613,6 +1056,7 @@ SQS: Now supports long polling (Issue #176).
 2.3.0
 =====
 :release-date: 2012-07-24 03:50 P.M BST
+:release-by: Ask Solem
 
 - New ``pyamqp://`` transport!
 
@@ -683,6 +1127,7 @@ SQS: Now supports long polling (Issue #176).
 2.2.6
 =====
 :release-date: 2012-07-10 17:00 P.M BST
+:release-by: Ask Solem
 
 - Adds ``kombu.messaging.entry_to_queue`` for compat with previous versions.
 
@@ -691,6 +1136,7 @@ SQS: Now supports long polling (Issue #176).
 2.2.5
 =====
 :release-date: 2012-07-10 17:00 P.M BST
+:release-by: Ask Solem
 
 - Pidbox: Now sets queue expire at 10 seconds for reply queues.
 
@@ -705,6 +1151,7 @@ SQS: Now supports long polling (Issue #176).
 2.2.4
 =====
 :release-date: 2012-07-05 16:00 P.M BST
+:release-by: Ask Solem
 
 - Support for msgpack-python 0.2.0 (Issue #143)
 
@@ -727,6 +1174,7 @@ SQS: Now supports long polling (Issue #176).
 2.2.3
 =====
 :release-date: 2012-06-24 17:00 P.M BST
+:release-by: Ask Solem
 
 - ``BrokerConnection`` now renamed to ``Connection``.
 
@@ -758,6 +1206,7 @@ SQS: Now supports long polling (Issue #176).
 2.2.2
 =====
 :release-date: 2012-06-22 02:30 P.M BST
+:release-by: Ask Solem
 
 - Now depends on :mod:`anyjson` 0.3.3
 
@@ -777,6 +1226,7 @@ SQS: Now supports long polling (Issue #176).
 2.2.1
 =====
 :release-date: 2012-06-21 01:00 P.M BST
+:release-by: Ask Solem
 
 - SQS: Default visibility timeout is now 30 minutes.
 
@@ -823,7 +1273,7 @@ SQS: Now supports long polling (Issue #176).
 2.2.0
 =====
 :release-date: 2012-06-07 3:10 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 .. _v220-important:
 
@@ -1066,7 +1516,7 @@ callback-based API later.
 2.1.8
 =====
 :release-date: 2012-05-06 3:06 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Bound Exchange/Queue's are now pickleable.
 
@@ -1096,6 +1546,7 @@ callback-based API later.
 2.1.7
 =====
 :release-date: 2012-04-27 6:00 P.M BST
+:release-by: Ask Solem
 
 * compat consumerset now accepts optional channel argument.
 
@@ -1104,6 +1555,7 @@ callback-based API later.
 2.1.6
 =====
 :release-date: 2012-04-23 1:30 P.M BST
+:release-by: Ask Solem
 
 * SQLAlchemy transport was not working correctly after URL parser change.
 
@@ -1120,6 +1572,7 @@ callback-based API later.
 2.1.5
 =====
 :release-date: 2012-04-13 3:30 P.M BST
+:release-by: Ask Solem
 
 * The url parser removed more than the first leading slash (Issue #121).
 
@@ -1144,6 +1597,7 @@ callback-based API later.
 2.1.4
 =====
 :release-date: 2012-04-03 4:00 P.M GMT
+:release-by: Ask Solem
 
 * MongoDB:  URL parsing are now delegated to the pymongo library
   (Fixes Issue #103 and Issue #87).
@@ -1170,7 +1624,7 @@ callback-based API later.
     Fix contributed by Stephan Jaekel.
 
 * All transport 'channel_errors' lists now includes
-  :exc:`~kombu.exception.StdChannelError`.
+  ``kombu.exception.StdChannelError``.
 
 * All kombu exceptions now inherit from a common
   :exc:`~kombu.exceptions.KombuError`.
@@ -1180,7 +1634,7 @@ callback-based API later.
 2.1.3
 =====
 :release-date: 2012-03-20 3:00 P.M GMT
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Fixes Jython compatibility issues.
 
@@ -1191,7 +1645,7 @@ callback-based API later.
 2.1.2
 =====
 :release-date: 2012-03-01 01:00 P.M GMT
-:by: Ask Solem
+:release-by: Ask Solem
 
 * amqplib: Last version broke SSL support.
 
@@ -1200,7 +1654,7 @@ callback-based API later.
 2.1.1
 =====
 :release-date: 2012-02-24 02:00 P.M GMT
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Connection URLs now supports encoded characters.
 
@@ -1220,7 +1674,7 @@ callback-based API later.
 2.1.0
 =====
 :release-date: 2012-02-04 10:38 P.M GMT
-:by: Ask Solem
+:release-by: Ask Solem
 
 * MongoDB: Now supports fanout (broadcast) (Issue #98).
 
@@ -1259,7 +1713,7 @@ callback-based API later.
 2.0.0
 =====
 :release-date: 2012-01-15 18:34 P.M GMT
-:by: Ask Solem
+:release-by: Ask Solem
 
 .. _v200-important:
 
@@ -1373,7 +1827,7 @@ Fixes
 1.5.1
 =====
 :release-date: 2011-11-30 01:00 P.M GMT
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Fixes issue with ``kombu.compat`` introduced in 1.5.0 (Issue #83).
 
@@ -1393,7 +1847,7 @@ Fixes
 1.5.0
 =====
 :release-date: 2011-11-27 06:00 P.M GMT
-:by: Ask Solem
+:release-by: Ask Solem
 
 * kombu.pools: Fixed a bug resulting in resources not being properly released.
 
@@ -1458,6 +1912,7 @@ Fixes
 1.4.3
 =====
 :release-date: 2011-10-27 10:00 P.M BST
+:release-by: Ask Solem
 
 * Fixes bug in ProducerPool where too many resources would be acquired.
 
@@ -1466,7 +1921,7 @@ Fixes
 1.4.2
 =====
 :release-date: 2011-10-26 05:00 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Eventio: Polling should ignore `errno.EINTR`
 
@@ -1494,7 +1949,7 @@ Fixes
 1.4.1
 =====
 :release-date: 2011-09-26 04:00 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 * 1.4.0 broke the producer pool, resulting in new connections being
   established for every acquire.
@@ -1505,7 +1960,7 @@ Fixes
 1.4.0
 =====
 :release-date: 2011-09-22 05:00 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Adds module :mod:`kombu.mixins`.
 
@@ -1561,7 +2016,7 @@ Fixes
 1.3.5
 =====
 :release-date: 2011-09-16 06:00 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Python 3: AMQP_PROTOCOL_HEADER must be bytes, not str.
 
@@ -1570,7 +2025,7 @@ Fixes
 1.3.4
 =====
 :release-date: 2011-09-16 06:00 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 * Fixes syntax error in pools.reset
 
@@ -1580,7 +2035,7 @@ Fixes
 1.3.3
 =====
 :release-date: 2011-09-15 02:00 P.M BST
-:by: Ask Solem
+:release-by: Ask Solem
 
 * pools.reset did not support after forker arguments.
 
@@ -1589,7 +2044,7 @@ Fixes
 1.3.2
 =====
 :release-date: 2011-09-10 01:00 P.M BST
-:by: Mher Movsisyan
+:release-by: Mher Movsisyan
 
 * Broke Python 2.5 compatibility by importing ``parse_qsl`` from ``urlparse``
 
@@ -1609,6 +2064,7 @@ Fixes
 1.3.1
 =====
 :release-date: 2011-10-07 03:00 P.M BST
+:release-by: Ask Solem
 
 * Last release broke after fork for pool reinitialization.
 
@@ -1633,6 +2089,7 @@ Fixes
 1.3.0
 =====
 :release-date: 2011-10-05 01:00 P.M BST
+:release-by: Ask Solem
 
 * Broker connection info can be now be specified using URLs
 
@@ -1743,6 +2200,7 @@ Fixes
 1.2.1
 =====
 :release-date: 2011-07-29 12:52 P.M BST
+:release-by: Ask Solem
 
 * Now depends on amqplib >= 1.0.0.
 
@@ -1787,6 +2245,7 @@ Fixes
 1.2.0
 =====
 :release-date: 2011-07-15 12:00 P.M BST
+:release-by: Ask Solem
 
 * Virtual: Fixes cyclic reference in Channel.close (Issue #49).
 
@@ -1808,6 +2267,7 @@ Fixes
 1.1.6
 =====
 :release-date: 2011-06-13 04:00 P.M BST
+:release-by: Ask Solem
 
 * Redis: Fixes issue introduced in 1.1.4, where a redis connection
   failure could leave consumer hanging forever.
@@ -1833,6 +2293,7 @@ Fixes
 1.1.5
 =====
 :release-date: 2011-06-07 06:00 P.M BST
+:release-by: Ask Solem
 
 * Fixes compatibility with redis-py 2.4.4.
 
@@ -1841,6 +2302,7 @@ Fixes
 1.1.4
 =====
 :release-date: 2011-06-07 04:00 P.M BST
+:release-by: Ask Solem
 
 * Redis transport: Now requires redis-py version 2.4.4 or later.
 
@@ -1869,6 +2331,7 @@ Fixes
 1.1.3
 =====
 :release-date: 2011-04-21 16:00 P.M CEST
+:release-by: Ask Solem
 
 * Redis: Consuming from multiple connections now works with Eventlet.
 
@@ -1895,6 +2358,7 @@ Fixes
 1.1.2
 =====
 :release-date: 2011-04-06 16:00 P.M CEST
+:release-by: Ask Solem
 
 * Redis: Fixes serious issue where messages could be lost.
 
@@ -1910,6 +2374,7 @@ Fixes
 1.1.1
 =====
 :release-date: 2011-04-05 15:51 P.M CEST
+:release-by: Ask Solem
 
 * 1.1.0 started using ``Queue.LifoQueue`` which is only available
   in Python 2.6+ (Issue #33).  We now ship with our own LifoQueue.
@@ -1920,6 +2385,7 @@ Fixes
 1.1.0
 =====
 :release-date: 2011-04-05 01:05 P.M CEST
+:release-by: Ask Solem
 
 .. _v110-important:
 
@@ -1990,10 +2456,10 @@ Important Notes
 * Channel objects now have a ``channel_id`` attribute.
 
 * MongoDB: Version sniffing broke with development versions of
-	mongod (Issue #29).
+    mongod (Issue #29).
 
 * New environment variable :envvar:`KOMBU_LOG_CONNECTION` will now emit debug
-  log messages for connection related actions.
+    log messages for connection related actions.
 
   :envvar:`KOMBU_LOG_DEBUG` will also enable :envvar:`KOMBU_LOG_CONNECTION`.
 
@@ -2002,6 +2468,7 @@ Important Notes
 1.0.7
 =====
 :release-date: 2011-03-28 05:45 P.M CEST
+:release-by: Ask Solem
 
 * Now depends on anyjson 0.3.1
 
@@ -2041,6 +2508,7 @@ Important Notes
 1.0.6
 =====
 :release-date: 2011-03-22 04:00 P.M CET
+:release-by: Ask Solem
 
 * The ``delivery_mode`` aliases (persistent/transient) were not automatically
   converted to integer, and would cause a crash if using the amqplib
@@ -2080,6 +2548,7 @@ Important Notes
 1.0.5
 =====
 :release-date: 2011-03-17 04:00 P.M CET
+:release-by: Ask Solem
 
 * Fixed memory leak when creating virtual channels.  All virtual transports
   affected (redis, mongodb, memory, django, sqlalchemy, couchdb, beanstalk).
@@ -2102,6 +2571,7 @@ Important Notes
 1.0.4
 =====
 :release-date: 2011-02-28 04:00 P.M CET
+:release-by: Ask Solem
 
 * Added Transport.polling_interval
 
@@ -2115,6 +2585,7 @@ Important Notes
 1.0.3
 =====
 :release-date: 2011-02-12 04:00 P.M CET
+:release-by: Ask Solem
 
 * ConnectionPool: Re-connect if amqplib connection closed
 
@@ -2127,6 +2598,7 @@ Important Notes
 1.0.2
 =====
 :release-date: 2011-01-31 10:45 P.M CET
+:release-by: Ask Solem
 
 * amqplib: Message properties were not set properly.
 * Ghettoq backend names are now automatically translated to the new names.
@@ -2136,6 +2608,7 @@ Important Notes
 1.0.1
 =====
 :release-date: 2011-01-28 12:00 P.M CET
+:release-by: Ask Solem
 
 * Redis: Now works with Linux (epoll)
 
@@ -2144,6 +2617,7 @@ Important Notes
 1.0.0
 =====
 :release-date: 2011-01-27 12:00 P.M CET
+:release-by: Ask Solem
 
 * Initial release
 
@@ -2152,5 +2626,6 @@ Important Notes
 0.1.0
 =====
 :release-date: 2010-07-22 04:20 P.M CET
+:release-by: Ask Solem
 
 * Initial fork of carrot

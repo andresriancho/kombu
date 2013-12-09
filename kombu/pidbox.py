@@ -27,7 +27,7 @@ from .utils import cached_property, kwdict, uuid, reprcall
 REPLY_QUEUE_EXPIRES = 10
 
 W_PIDBOX_IN_USE = """\
-A node named %(hostname)r is already using this process mailbox!
+A node named {node.hostname} is already using this process mailbox!
 
 Maybe you forgot to shutdown the other node or did not do so properly?
 Or if you meant to start multiple nodes on the same host please make sure
@@ -67,24 +67,25 @@ class Node(object):
             handlers = {}
         self.handlers = handlers
 
-    def Consumer(self, channel=None, **options):
-        options.setdefault('no_ack', True)
-        options.setdefault('accept', self.mailbox.accept)
+    def Consumer(self, channel=None, no_ack=True, accept=None, **options):
         queue = self.mailbox.get_queue(self.hostname)
 
         def verify_exclusive(name, messages, consumers):
             if consumers:
-                warnings.warn(W_PIDBOX_IN_USE % {'hostname': self.hostname})
+                warnings.warn(W_PIDBOX_IN_USE.format(node=self))
         queue.on_declared = verify_exclusive
 
-        return Consumer(channel or self.channel, [queue], **options)
+        return Consumer(
+            channel or self.channel, [queue], no_ack=no_ack,
+            accept=self.mailbox.accept if accept is None else accept,
+            **options
+        )
 
     def handler(self, fun):
         self.handlers[fun.__name__] = fun
         return fun
 
     def listen(self, channel=None, callback=None):
-        callback = callback or self.handle_message
         consumer = self.Consumer(channel=channel,
                                  callbacks=[callback or self.handle_message])
         consumer.consume()
@@ -153,6 +154,9 @@ class Mailbox(object):
     #: exchange to send replies to.
     reply_exchange = None
 
+    #: Only accepts json messages by default.
+    accept = ['json']
+
     def __init__(self, namespace,
                  type='direct', connection=None, clock=None, accept=None):
         self.namespace = namespace
@@ -163,7 +167,7 @@ class Mailbox(object):
         self.reply_exchange = self._get_reply_exchange(self.namespace)
         self._tls = local()
         self.unclaimed = defaultdict(deque)
-        self.accept = accept
+        self.accept = self.accept if accept is None else accept
 
     def __call__(self, connection):
         bound = copy(self)
@@ -216,7 +220,7 @@ class Mailbox(object):
                      auto_delete=True)
 
     def _publish_reply(self, reply, exchange, routing_key, ticket,
-                       channel=None):
+                       channel=None, **opts):
         chan = channel or self.connection.default_channel
         exchange = Exchange(exchange, exchange_type='direct',
                             delivery_mode='transient',
@@ -228,6 +232,7 @@ class Mailbox(object):
                 declare=[exchange], headers={
                     'ticket': ticket, 'clock': self.clock.forward(),
                 },
+                **opts
             )
         except InconsistencyError:
             pass   # queue probably deleted and no one is expecting a reply.
@@ -248,7 +253,7 @@ class Mailbox(object):
         producer.publish(
             message, exchange=exchange.name, declare=[exchange],
             headers={'clock': self.clock.forward(),
-                     'expires': time() + timeout if timeout else None},
+                     'expires': time() + timeout if timeout else 0},
         )
 
     def _broadcast(self, command, arguments=None, destination=None,

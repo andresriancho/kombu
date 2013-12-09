@@ -20,7 +20,7 @@ from distutils.command.install import INSTALL_SCHEMES
 # -- Parse meta
 import re
 re_meta = re.compile(r'__(\w+?)__\s*=\s*(.*)')
-re_vers = re.compile(r'VERSION\s*=\s*\((.*?)\)')
+re_vers = re.compile(r'VERSION\s*=.*?\((.*?)\)')
 re_doc = re.compile(r'^"""(.+?)"""')
 rq = lambda s: s.strip("\"'")
 
@@ -105,19 +105,37 @@ def strip_comments(l):
     return l.split('#', 1)[0].strip()
 
 
-def reqs(f):
-    return filter(None, [strip_comments(l) for l in open(
-        os.path.join(os.getcwd(), 'requirements', f)).readlines()])
+def reqs(*f):
+    return [
+        r for r in (
+            strip_comments(l) for l in open(
+                os.path.join(os.getcwd(), 'requirements', *f)).readlines()
+        ) if r]
 
 install_requires = reqs('default.txt')
 if py_version[0:2] == (2, 6):
     install_requires.extend(reqs('py26.txt'))
-elif py_version[0:2] == (2, 5):
-    install_requires.extend(reqs('py25.txt'))
 
 # -*- Tests Requires -*-
 
 tests_require = reqs('test3.txt' if PY3 else 'test.txt')
+
+extras = lambda *p: reqs('extras', *p)
+extras_require = extra['extras_require'] = {
+    'msgpack': extras('msgpack.txt'),
+    'yaml': extras('yaml.txt'),
+    'redis': extras('redis.txt'),
+    'mongodb': extras('mongodb.txt'),
+    'sqs': extras('sqs.txt'),
+    'couchdb': extras('couchdb.txt'),
+    'beanstalk': extras('beanstalk.txt'),
+    'zookeeper': extras('zookeeper.txt'),
+    'zeromq': extras('zeromq.txt'),
+    'sqlalchemy': extras('sqlalchemy.txt'),
+    'librabbitmq': extras('librabbitmq.txt'),
+    'pyro': extras('pyro.txt'),
+    'slmq': extras('slmq.txt'),
+}
 
 setup(
     name='kombu',
@@ -140,7 +158,6 @@ setup(
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.3',
-        'Programming Language :: Python :: 3.2',
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2',

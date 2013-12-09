@@ -25,7 +25,7 @@ patch = mock.patch
 call = mock.call
 
 
-class TestCase(unittest.TestCase):
+class Case(unittest.TestCase):
 
     def assertItemsEqual(self, a, b, *args, **kwargs):
         return self.assertEqual(sorted(a), sorted(b), *args, **kwargs)
@@ -95,15 +95,22 @@ def module_exists(*modules):
 
         @wraps(fun)
         def __inner(*args, **kwargs):
+            gen = []
             for module in modules:
                 if isinstance(module, string_t):
                     if not PY3:
                         module = ensure_bytes(module)
                     module = types.ModuleType(module)
+                gen.append(module)
                 sys.modules[module.__name__] = module
-                try:
-                    return fun(*args, **kwargs)
-                finally:
+                name = module.__name__
+                if '.' in name:
+                    parent, _, attr = name.rpartition('.')
+                    setattr(sys.modules[parent], attr, module)
+            try:
+                return fun(*args, **kwargs)
+            finally:
+                for module in gen:
                     sys.modules.pop(module.__name__, None)
 
         return __inner
@@ -166,13 +173,13 @@ def skip_if_module(module):
     return _wrap_test
 
 
-def skip_if_not_module(module):
+def skip_if_not_module(module, import_errors=(ImportError, )):
     def _wrap_test(fun):
         @wraps(fun)
         def _skip_if_not_module(*args, **kwargs):
             try:
                 __import__(module)
-            except ImportError:
+            except import_errors:
                 raise SkipTest('SKIP %s: %s available\n' % (
                     fun.__name__, module))
             return fun(*args, **kwargs)
